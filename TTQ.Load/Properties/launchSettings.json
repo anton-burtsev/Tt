@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "TTQ.Load": {
+      "commandName": "Project"
+    },
+    "Docker": {
+      "commandName": "Docker"
+    }
+  }
+}
