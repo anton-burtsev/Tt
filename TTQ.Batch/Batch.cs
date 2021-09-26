@@ -8,6 +8,8 @@ using TTQ.Manager;
 var server = new TcpListener(IPAddress.Any, 2020);
 server.Start();
 
+await Task.Delay(3000);
+
 QueueManager qm = new QueueManager();
 await qm.Connect("localhost:3301");
 

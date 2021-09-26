@@ -12,7 +12,7 @@ builder.Services.AddSwaggerGen(c =>
     c.SwaggerDoc("v1", new() { Title = "TTQ", Version = "v1" });
 });
 
-var qm = new HQueue();
+var qm = new TtqAggregator();
 await qm.Connect();
 builder.Services.AddSingleton(qm);
 var app = builder.Build();

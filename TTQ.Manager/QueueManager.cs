@@ -26,21 +26,47 @@ namespace TTQ.Manager
             var clientOptions = new ClientOptions(tt, context: msgPackContext);
             clientOptions.ConnectionOptions.WriteThrottlePeriodInMs = 0;
 
-
             box = new Box(clientOptions);
             await box.Connect();
+
             var s = box.GetSchema();
+            if (s.Spaces.Any(sp => sp.Name == "QUEUE"))
+                await box.ExecuteSql("drop table queue;");
+
+            await box.Eval<int>($"box.cfg {{ memtx_memory = {16_000_000_000} }}");
+
+            await box.ExecuteSql(@"
+                create table queue(
+	                id text,
+	                status int,
+	                qid int,
+	                routerTag text,
+	                vs text,
+	                messageType int,
+	                ts int,
+	                payload text,
+	                constraint queue_id primary key(id)
+                );");
+
+            await box.ExecuteSql(@"create index queue_q on queue(status, qid, routerTag, ts);");
+            await box.ExecuteSql(@"create index queue_q_vs on queue(status, qid, routerTag, vs, ts);");
+            await box.ExecuteSql(@"create index queue_q_mt on queue(status, qid, routerTag, messageType, ts);");
+
+            //await Task.Delay(1000);
+            
+            await box.ReloadBoxInfo();
+            await box.ReloadSchema();
+
+            s = box.GetSchema();
             space = s["QUEUE"];
             i_queue_q = space["QUEUE_Q"];
             i_queue_q_vs = space["QUEUE_Q_VS"];
-
-            await box.Eval<int>($"box.cfg {{ memtx_memory = {16_000_000_000} }}");
 
             _ = Task.Factory.StartNew(async () =>
             {
                 var sems = Enumerable.Range(0, 1000).Select(_ => new SemaphoreSlim(1)).ToArray();
 
-                var sem = new SemaphoreSlim(2);
+                var sem = new SemaphoreSlim(100);
 
                 while (true)
                 {
@@ -78,7 +104,7 @@ namespace TTQ.Manager
                 QueueMsg[] recs;
                 if ( string.IsNullOrWhiteSpace(req.vs))
                 {
-                    recs = (await i_queue_q_vs.Select<(long, long, string), QueueMsg>(
+                    recs = (await i_queue_q.Select<(long, long, string), QueueMsg>(
                         (0, req.qid, req.routerTag), new SelectOptions { Iterator = Iterator.Eq, Limit = (uint)tasks.Count })).Data;
                 }
                 else

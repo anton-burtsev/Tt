@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using TTQ.Manager;
 
-namespace TTQ.Load
+namespace TTQ.Manager
 {
     public class SQueue
     {

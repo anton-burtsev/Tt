@@ -2,15 +2,15 @@
 
 namespace TTQ
 {
-    public class HQueue
+    public class TtqAggregator
     {
-        QueueManager[] clients = new QueueManager[Math.Max(1, Convert.ToInt32(Environment.GetEnvironmentVariable("TTQ_TT_N")))];
+        readonly SQueue[] clients = new SQueue[Math.Max(1, Convert.ToInt32(Environment.GetEnvironmentVariable("TTQ_TT_N")))];
         public async Task Connect()
         {
             for (var i = 0; i < clients.Length; i++)
             {
-                clients[i] = new QueueManager();
-                await clients[i].Connect($"tt-{i}.tt.tt.svc.cluster.local:3301");
+                clients[i] = new();
+                await clients[i].Connect($"tt-{i}.tt.tt.svc.cluster.local", 2020);
             }
         }
 
@@ -28,7 +28,6 @@ namespace TTQ
             }
             return null;
         }
-        public async Task Ack(string mid) => await clients[QueueMsg.GetShardNumber(mid,clients.Length)].Ack(mid);
-
+        public async Task Ack(string mid) => await clients[QueueMsg.GetShardNumber(mid, clients.Length)].Ack(mid);
     }
 }

@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "TTQ.Batch": {
+      "commandName": "Project"
+    },
+    "Docker": {
+      "commandName": "Docker"
+    }
+  }
+}
