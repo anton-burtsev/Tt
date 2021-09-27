@@ -1,4 +1,5 @@
-﻿using TTQ.Load;
+﻿using System.Diagnostics;
+using TTQ.Load;
 using TTQ.Manager;
 
 var N = Math.Max(1, Convert.ToInt32(Environment.GetEnvironmentVariable("TTQL_N")));
@@ -17,16 +18,17 @@ Console.WriteLine($"DOP_PUT\t{dopPut}");
 var dopGet = Math.Max(0, Convert.ToInt32(Environment.GetEnvironmentVariable("TTQL_DOP_GET")));
 Console.WriteLine($"DOP_GET\t{dopGet}");
 
-var putRps = new RpsMeter();
-var getRps = new RpsMeter();
+var writer = new Writer("default.message");
 
 _ = Task.Factory.StartNew(async () =>
 {
     var sem = new SemaphoreSlim(dopPut);
     var qm = new LQueue();
     var rnd = new Random();
+    var ramp = 30L;
     while (true)
     {
+        if (ramp-- > 0) await Task.Delay((int)ramp);
         await sem.WaitAsync();
         var start = DateTime.Now;
         var payload = string.Join('|', Enumerable.Range(0, payloadSize / 30 + 1).Select(i => Guid.NewGuid().ToString())).Substring(0, payloadSize);
@@ -42,7 +44,7 @@ _ = Task.Factory.StartNew(async () =>
             payload = payload
         }).ContinueWith(t =>
         {
-            putRps.Hit(DateTime.Now - start);
+            writer.Write(DateTime.Now, "PUT", (DateTime.Now - start).TotalMilliseconds, 1);
             sem.Release();
         });
     }
@@ -54,9 +56,11 @@ _ = Task.Factory.StartNew(async () =>
     var rnd = new Random();
     var sem = new SemaphoreSlim(dopGet);
     var qm = new LQueue();
+    var ramp = 30L;
 
     while (true)
     {
+        if (ramp-- > 0) await Task.Delay((int)ramp);
         await sem.WaitAsync();
         var start = DateTime.Now;
         var qid = rnd.Next(N);
@@ -64,20 +68,16 @@ _ = Task.Factory.StartNew(async () =>
         _ = qm.Get(qid, "new", vs).ContinueWith(async t =>
          {
              var msg = t.Result;
+             writer.Write(DateTime.Now, "GET", (DateTime.Now - start).TotalMilliseconds, 1);
+             start = DateTime.Now;
              if (msg is not null)
+             {
                  await qm.Ack(msg.id);
-             getRps.Hit(DateTime.Now - start);
+                 writer.Write(DateTime.Now, "ACK", (DateTime.Now - start).TotalMilliseconds, 1);
+             }
              sem.Release();
          });
     }
 }, TaskCreationOptions.LongRunning);
 
-Console.WriteLine();
-Console.WriteLine("     RPS\tLAT\t\t      RPS\tLAT");
-while (true)
-{
-    await Task.Delay(1000);
-    Console.WriteLine($"put: {putRps.GetRps():0}\t{putRps.GetLat():00.0}\t\t get: {getRps.GetRps():0}\t{getRps.GetLat():00.0}");
-}
-
-//while (true) await Task.Delay(10);
+while (true) await Task.Delay(100);

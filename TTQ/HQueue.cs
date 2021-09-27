@@ -11,6 +11,7 @@ namespace TTQ
             {
                 clients[i] = new();
                 await clients[i].Connect($"tt-{i}.tt.tt.svc.cluster.local", 2020);
+                //await clients[i].Connect($"localhost", 2020);
             }
         }
 

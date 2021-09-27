@@ -3,7 +3,8 @@ using ProGaudi.Tarantool.Client;
 using ProGaudi.Tarantool.Client.Model;
 using ProGaudi.Tarantool.Client.Model.Enums;
 using ProGaudi.Tarantool.Client.Model.UpdateOperations;
-using System.Diagnostics;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 
@@ -53,7 +54,7 @@ namespace TTQ.Manager
             await box.ExecuteSql(@"create index queue_q_mt on queue(status, qid, routerTag, messageType, ts);");
 
             //await Task.Delay(1000);
-            
+
             await box.ReloadBoxInfo();
             await box.ReloadSchema();
 
@@ -70,15 +71,24 @@ namespace TTQ.Manager
 
                 while (true)
                 {
-                    await sem.WaitAsync();
-                    _ = requestChannel.Reader.ReadAsync().AsTask().ContinueWith(async t => {
-                        var iii = Math.Abs(t.Result.GetStaticHashCode()) % sems.Length;
-                        await sems[iii].WaitAsync();
-                        _ = processRequest(t.Result).ContinueWith(_ => {
-                            sems[iii].Release();
-                            sem.Release();
+                    try
+                    {
+                        await sem.WaitAsync();
+                        _ = requestChannel.Reader.ReadAsync().AsTask().ContinueWith(async t =>
+                        {
+                            var iii = Math.Abs(t.Result.GetStaticHashCode()) % sems.Length;
+                            await sems[iii].WaitAsync();
+                            _ = processRequest(t.Result).ContinueWith(_ =>
+                            {
+                                sems[iii].Release();
+                                sem.Release();
+                            });
                         });
-                    });
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex);
+                    }
                 }
             });
         }
@@ -102,7 +112,7 @@ namespace TTQ.Manager
                 //var sw = Stopwatch.StartNew();
 
                 QueueMsg[] recs;
-                if ( string.IsNullOrWhiteSpace(req.vs))
+                if (string.IsNullOrWhiteSpace(req.vs))
                 {
                     recs = (await i_queue_q.Select<(long, long, string), QueueMsg>(
                         (0, req.qid, req.routerTag), new SelectOptions { Iterator = Iterator.Eq, Limit = (uint)tasks.Count })).Data;
@@ -139,7 +149,7 @@ namespace TTQ.Manager
             }
             catch (Exception e)
             {
-                Console.WriteLine(e.ToString());
+                Console.WriteLine(e);
             }
         }
 
@@ -222,8 +232,26 @@ namespace TTQ.Manager
         [MsgPackArrayElement(7)]
         public string? payload { get; set; }
 
-        public static int GetShardNumber(string mid, int totalShards) => Math.Abs(mid.GetHashCode()) % totalShards;
-        public int GetShardNumber(int totalShards) => GetShardNumber(id, totalShards);
+        public static int GetShardNumber(string mid, int totalShards) => GetStableHashCode(mid, totalShards);
+        public int GetShardNumber(int totalShards) => GetStableHashCode(id, totalShards);
+
+        static int GetStableHashCode(string s, int range)
+        {
+            var hash = 0;
+            var N = Math.Max(s.Length, 32);
+            for (var i = 0; i < N; i++)
+            {
+                hash <<= 1;
+                hash ^= s[i % s.Length];
+            }
+            return Math.Abs(hash) % range;
+        }
+        //static int GetStableHashCode(string s, int range)
+        //{
+        //    var data = Encoding.Unicode.GetBytes(s);
+        //    lock (hashLock)
+        //        return Math.Abs(BitConverter.ToInt32(MD5.HashData(data))) % range;
+        //}
     }
 
     public class MsgRequest
@@ -239,7 +267,7 @@ namespace TTQ.Manager
         public int GetStaticHashCode() => $"{qid}|{routerTag}".GetHashCode();
     }
 
-    public enum TtqOpType { NOP,PUT,GET,ACK }
+    public enum TtqOpType { NOP, PUT, GET, ACK }
     public class TtqRequest
     {
         public TtqOpType Operation { get; set; }
@@ -266,15 +294,37 @@ namespace TTQ.Manager
 
     public static class IoTools
     {
+        public static T Deserialize<T>(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return default(T);
+            return JsonSerializer.Deserialize<T>(s);
 
+        }
+        public static T Deserialize<T>(byte[] b)
+        {
+            if (b == null || b.Length == 0) return default(T);
+            return JsonSerializer.Deserialize<T>(b);
+        }
+        public static byte[] SerializeOne(object h)
+        {
+            if (h is not null)
+                return JsonSerializer.SerializeToUtf8Bytes(h);
+            else
+                return new byte[0];
+        }
         public static byte[] SerializePair(object h, object m = null)
         {
             var ms = new MemoryStream();
             var bw = new BinaryWriter(ms);
 
-            var h_data = JsonSerializer.SerializeToUtf8Bytes(h);
-            bw.Write(h_data.Length);
-            bw.Write(h_data);
+            if (h is not null)
+            {
+                var h_data = JsonSerializer.SerializeToUtf8Bytes(h);
+                bw.Write(h_data.Length);
+                bw.Write(h_data);
+            }
+            else
+                bw.Write(0);
 
             if (m is not null)
             {
@@ -288,32 +338,68 @@ namespace TTQ.Manager
             return ms.ToArray();
         }
 
-        public static void RunAsyncIO(Channel<byte[]> chout, Channel<(byte[], byte[])> chin, Stream s, Action<byte[], byte[]> processor)
+        public static void RunAsyncIO(
+            Channel<byte[]> chout, Channel<(byte[], byte[])> chin,
+            TcpClient client_out, TcpClient client_in,
+            Action<byte[], byte[]> processor)
         {
             _ = Task.Factory.StartNew(async () => // read all data from network
             {
-                var br = new BinaryReader(new BufferedStream(s, 1024 * 1024));
+                using var bs = new BufferedStream(client_in.GetStream(), 1024 * 1024);
+                using var br = new BinaryReader(bs);
                 while (true)
                 {
-                    await chin.Writer.WriteAsync((br.ReadBytes(br.ReadInt32()), br.ReadBytes(br.ReadInt32())));
+                    try
+                    {
+                        await chin.Writer.WriteAsync((br.ReadBytes(br.ReadInt32()), br.ReadBytes(br.ReadInt32())));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex);
+                        if (!client_in.Connected)
+                        {
+                            Console.WriteLine("Exiting reader...");
+                            break;
+                        }
+                    }
                 }
             }, TaskCreationOptions.LongRunning);
 
             _ = Task.Factory.StartNew(async () => // write all data to network
             {
-                var bw = new BinaryWriter(new BufferedStream(s, 1024 * 1024));
+                using var bs = new BufferedStream(client_out.GetStream(), 1024 * 1024);
+                using var bw = new BinaryWriter(bs);
                 await foreach (var b in chout.Reader.ReadAllAsync())
                 {
-                    bw.Write(b);
-                    if (chout.Reader.Count == 0)
-                        bw.Flush();
+                    try
+                    {
+                        bw.Write(b);
+
+                        if (chout.Reader.Count == 0)
+                            bw.Flush();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex);
+                        if (!client_out.Connected)
+                        {
+                            Console.WriteLine("Exiting...");
+                            break;
+                        }
+                    }
                 }
             }, TaskCreationOptions.LongRunning);
 
             _ = Task.Factory.StartNew(async () => // process message 1 by 1
             {
                 await foreach (var (header, message) in chin.Reader.ReadAllAsync())
-                    processor(header, message);
+                {
+                    try
+                    {
+                        processor(header, message);
+                    }
+                    catch (Exception ex) { Console.WriteLine(ex); }
+                }
             });
         }
     }

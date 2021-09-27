@@ -7,6 +7,9 @@ namespace TTQ.Load
     public class LQueue
     {
         HttpClient client = new() { BaseAddress = new Uri("http://ttq.tt.svc.cluster.local") };
+        //HttpClient client = new() { BaseAddress = new Uri("http://localhost:5231") };
+
+
         public async Task Put(QueueMsg m) =>
             await client.PostAsync("/Ttq/Put", JsonContent.Create(m));
 
@@ -20,7 +23,7 @@ namespace TTQ.Load
 
             if (string.IsNullOrWhiteSpace(s))
                 return null;
-            return JsonSerializer.Deserialize<QueueMsg?>(s);
+            return IoTools.Deserialize<QueueMsg?>(s);
         }
 
         public async Task Ack(string mid) =>
