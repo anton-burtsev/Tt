@@ -1,7 +1,5 @@
-﻿using System.Diagnostics;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
-using System.Text.Json;
 using System.Threading.Channels;
 using TTQ.Manager;
 
@@ -53,17 +51,15 @@ while (true)
                     if (request.Operation == TtqOpType.PUT)
                     {
                         var msg = IoTools.Deserialize<QueueMsg>(message);
-                        Console.WriteLine($"before save {msg.id}");
                         _ = qm.Put(msg).ContinueWith(async t =>
                         {
-                            Console.WriteLine($"after save {msg.id}");
                             await chout.Writer.WriteAsync(IoTools.SerializePair(
                                 new TtqResponse { RequestId = request.Id, Operation = TtqOpType.PUT }));
                         });
                     }
                     if (request.Operation == TtqOpType.GET)
                     {
-                        var getReq = JsonSerializer.Deserialize<GetRequest>(message);
+                        var getReq = IoTools.Deserialize<GetRequest>(message);
                         _ = qm.Get(getReq.qid, getReq.routerTag, getReq.vs).ContinueWith(async t =>
                         {
                             await chout.Writer.WriteAsync(IoTools.SerializePair(
@@ -84,6 +80,7 @@ while (true)
             }
         }
         catch (Exception ex) { Console.WriteLine(ex); }
+
     }, TaskCreationOptions.LongRunning);
 
 }

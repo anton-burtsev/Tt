@@ -5,6 +5,7 @@ namespace TTQ
     public class TtqAggregator
     {
         readonly SQueue[] clients = new SQueue[Math.Max(1, Convert.ToInt32(Environment.GetEnvironmentVariable("TTQ_TT_N")))];
+
         public async Task Connect()
         {
             for (var i = 0; i < clients.Length; i++)

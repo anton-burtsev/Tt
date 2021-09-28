@@ -4,7 +4,6 @@ using ProGaudi.Tarantool.Client.Model;
 using ProGaudi.Tarantool.Client.Model.Enums;
 using ProGaudi.Tarantool.Client.Model.UpdateOperations;
 using System.Net.Sockets;
-using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 
@@ -53,8 +52,6 @@ namespace TTQ.Manager
             await box.ExecuteSql(@"create index queue_q_vs on queue(status, qid, routerTag, vs, ts);");
             await box.ExecuteSql(@"create index queue_q_mt on queue(status, qid, routerTag, messageType, ts);");
 
-            //await Task.Delay(1000);
-
             await box.ReloadBoxInfo();
             await box.ReloadSchema();
 
@@ -65,6 +62,7 @@ namespace TTQ.Manager
 
             _ = Task.Factory.StartNew(async () =>
             {
+                // don't perform simutaneous operations with same queue
                 var sems = Enumerable.Range(0, 1000).Select(_ => new SemaphoreSlim(1)).ToArray();
 
                 var sem = new SemaphoreSlim(100);
@@ -102,11 +100,6 @@ namespace TTQ.Manager
                     if (requestMap.TryGetValue(req, out tasks))
                         requestMap.Remove(req);
 
-                //if (tasks is not null)
-                //    for (var i = 0; i < tasks.Count; i++)
-                //        tasks[i].SetResult(null);
-                //return;
-
                 if (tasks is null) return;
 
                 //var sw = Stopwatch.StartNew();
@@ -143,7 +136,7 @@ namespace TTQ.Manager
                     if (i < recs.Length)
                         tasks[i].SetResult(recs[i]);
                     else
-                        tasks[i].SetResult(null);
+                        tasks[i].SetResult(new QueueMsg());
 
                 //Console.WriteLine($"count: {tasks.Count}\tlat: {sw.ElapsedMilliseconds}");
             }
@@ -158,29 +151,6 @@ namespace TTQ.Manager
 
         public async Task Ack(string id) => await space.Delete<ValueTuple<string>, QueueMsg>(ValueTuple.Create(id));
 
-        public async Task<QueueMsg> Get2(long qid, string routerTag, string vs = null)
-        {
-            QueueMsg[] recs;
-            if (string.IsNullOrWhiteSpace(vs))
-            {
-                recs = (await i_queue_q_vs.Select<(long, long, string), QueueMsg>(
-                    (0, qid, routerTag), new SelectOptions { Iterator = Iterator.Eq, Limit = 1 })).Data;
-            }
-            else
-            {
-                recs = (await i_queue_q_vs.Select<(long, long, string, string), QueueMsg>(
-                    (0, qid, routerTag, vs), new SelectOptions { Iterator = Iterator.Eq, Limit = 1 })).Data;
-            }
-
-
-            if (recs.Length > 0)
-            {
-                await SetStatus(recs[0].id, 1);
-
-                return recs[0];
-            }
-            return null;
-        }
         public async Task<QueueMsg> Get(long qid, string routerTag, string vs = null)
         {
             var t = new TaskCompletionSource<QueueMsg>();
@@ -246,12 +216,6 @@ namespace TTQ.Manager
             }
             return Math.Abs(hash) % range;
         }
-        //static int GetStableHashCode(string s, int range)
-        //{
-        //    var data = Encoding.Unicode.GetBytes(s);
-        //    lock (hashLock)
-        //        return Math.Abs(BitConverter.ToInt32(MD5.HashData(data))) % range;
-        //}
     }
 
     public class MsgRequest
@@ -291,7 +255,6 @@ namespace TTQ.Manager
     }
 
 
-
     public static class IoTools
     {
         public static T Deserialize<T>(string s)
@@ -310,7 +273,7 @@ namespace TTQ.Manager
             if (h is not null)
                 return JsonSerializer.SerializeToUtf8Bytes(h);
             else
-                return new byte[0];
+                return Array.Empty<byte>();
         }
         public static byte[] SerializePair(object h, object m = null)
         {
@@ -351,16 +314,16 @@ namespace TTQ.Manager
                 {
                     try
                     {
-                        await chin.Writer.WriteAsync((br.ReadBytes(br.ReadInt32()), br.ReadBytes(br.ReadInt32())));
+                        var h_len = br.ReadInt32();
+                        var h_data = br.ReadBytes(h_len);
+                        var m_len = br.ReadInt32();
+                        var m_data = (m_len > 0) ? br.ReadBytes(m_len) : Array.Empty<byte>();
+                        await chin.Writer.WriteAsync((h_data, m_data));
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine(ex);
-                        if (!client_in.Connected)
-                        {
-                            Console.WriteLine("Exiting reader...");
-                            break;
-                        }
+                        break;
                     }
                 }
             }, TaskCreationOptions.LongRunning);
@@ -381,11 +344,7 @@ namespace TTQ.Manager
                     catch (Exception ex)
                     {
                         Console.WriteLine(ex);
-                        if (!client_out.Connected)
-                        {
-                            Console.WriteLine("Exiting...");
-                            break;
-                        }
+                        break;
                     }
                 }
             }, TaskCreationOptions.LongRunning);

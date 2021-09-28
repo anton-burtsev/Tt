@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using TTQ.Load;
+﻿using TTQ.Load;
 using TTQ.Manager;
 
 var N = Math.Max(1, Convert.ToInt32(Environment.GetEnvironmentVariable("TTQL_N")));
@@ -70,7 +69,7 @@ _ = Task.Factory.StartNew(async () =>
              var msg = t.Result;
              writer.Write(DateTime.Now, "GET", (DateTime.Now - start).TotalMilliseconds, 1);
              start = DateTime.Now;
-             if (msg is not null)
+             if (msg is not null && !string.IsNullOrWhiteSpace(msg.id))
              {
                  await qm.Ack(msg.id);
                  writer.Write(DateTime.Now, "ACK", (DateTime.Now - start).TotalMilliseconds, 1);
